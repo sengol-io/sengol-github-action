@@ -1,0 +1,92 @@
+name: 'Sengol AI Governance'
+description: 'Run a Sengol evaluation suite and gate CI/CD on compliance obligations'
+author: 'Sengol'
+
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  config:
+    description: 'Path to sengol.yaml (per-org runtime config).'
+    required: false
+    default: 'sengol.yaml'
+  python-version:
+    description: 'Python version to set up before installing sengol.'
+    required: false
+    default: '3.11'
+  sengol-version:
+    description: 'Pin a specific sengol release (e.g. "0.2.0"). Empty installs latest.'
+    required: false
+    default: ''
+  fail-on-gate-failure:
+    description: 'Exit the action non-zero when the PromotionGate verdict is fail.'
+    required: false
+    default: 'true'
+  output-format:
+    description: 'CI/CD output adapter: "github-summary" (default) or "junit".'
+    required: false
+    default: 'github-summary'
+  junit-output-path:
+    description: 'Path to write JUnit XML when output-format=junit. Ignored otherwise.'
+    required: false
+    default: 'eval-results.xml'
+
+outputs:
+  passed:
+    description: 'String "true" or "false" — overall gate verdict.'
+    value: ${{ steps.run-suite.outputs.passed }}
+  score:
+    description: 'Overall pass rate as a float in [0, 1].'
+    value: ${{ steps.run-suite.outputs.score }}
+  report-url:
+    description: 'Relative path to the JSON evidence pack, when written.'
+    value: ${{ steps.run-suite.outputs.report_url }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: 'Set up Python'
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: 'Install sengol'
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.sengol-version }}" ]; then
+          python -m pip install --quiet "sengol==${{ inputs.sengol-version }}"
+        else
+          python -m pip install --quiet sengol
+        fi
+
+    - name: 'Run evaluation suite'
+      id: run-suite
+      shell: bash
+      env:
+        # SENGOL_AUDIT_URI + SENGOL_SIGNING_KEY must be supplied by the
+        # workflow (typically from organization secrets). The action does
+        # not inject defaults — production audit storage is the caller's
+        # responsibility.
+        SENGOL_TENANT_ID: ${{ env.SENGOL_TENANT_ID }}
+      run: |
+        set -euo pipefail
+        FAIL_FLAG=""
+        if [ "${{ inputs.fail-on-gate-failure }}" = "true" ]; then
+          FAIL_FLAG="--fail-on-gate-failure"
+        fi
+
+        case "${{ inputs.output-format }}" in
+          junit)
+            sengol run-suite --config "${{ inputs.config }}" \
+              --output junit ${FAIL_FLAG} > "${{ inputs.junit-output-path }}"
+            ;;
+          github-summary)
+            sengol run-suite --config "${{ inputs.config }}" \
+              --output github-summary ${FAIL_FLAG}
+            ;;
+          *)
+            echo "::error::Unknown output-format '${{ inputs.output-format }}' (expected 'github-summary' or 'junit')"
+            exit 2
+            ;;
+        esac
