@@ -2,14 +2,14 @@
 
 GitHub Action that runs a [Sengol](https://github.com/sengol-io/sengol) evaluation suite and gates CI/CD on compliance obligations.
 
-The action installs `sengol`, runs `sengol run-suite` against your `sengol.yaml`, and writes the results to the GitHub Actions step summary, as JUnit XML, or as workflow-command annotations — your pipeline fails when an obligation pass rate falls below its declared threshold.
+The action installs `sengol`, runs `sengol run-suite` against your `sengol.yaml`, and writes the results to either the GitHub Actions step summary or a JUnit XML file. Workflow-command `::error::` annotations are emitted alongside both modes so failed obligations surface inline on the PR diff. Your pipeline fails when an obligation pass rate falls below its declared threshold.
 
 ## Usage
 
 Minimal — runs the suite, fails the workflow when the gate fails, writes a markdown summary to the run page:
 
 ```yaml
-- uses: sengol-io/sengol-github-action@v1
+- uses: sengol-io/sengol-github-action@v0.1.0
   with:
     config: sengol.yaml
   env:
@@ -22,7 +22,7 @@ Minimal — runs the suite, fails the workflow when the gate fails, writes a mar
 JUnit XML output (for surfacing failures in test-report integrations):
 
 ```yaml
-- uses: sengol-io/sengol-github-action@v1
+- uses: sengol-io/sengol-github-action@v0.1.0
   with:
     output-format: junit
     junit-output-path: eval-results.xml
@@ -48,8 +48,8 @@ JUnit XML output (for surfacing failures in test-report integrations):
 | Output | Description |
 |---|---|
 | `passed` | `"true"` / `"false"` — gate verdict for downstream steps. |
-| `score` | Overall pass rate (float in `[0, 1]`). |
-| `report-url` | Relative path to the JSON evidence pack, when written. |
+
+> The SDK currently only writes the `passed` output. `score` and `report-url` are tracked in the SDK's gap analysis and will be wired in a follow-up release.
 
 ## Required secrets
 

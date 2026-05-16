@@ -24,7 +24,7 @@ inputs:
     required: false
     default: 'true'
   output-format:
-    description: 'CI/CD output adapter: "github-summary" (default) or "junit".'
+    description: 'CI/CD output adapter: "github-summary" (default) or "junit". Workflow-command annotations are emitted alongside both modes.'
     required: false
     default: 'github-summary'
   junit-output-path:
@@ -36,12 +36,6 @@ outputs:
   passed:
     description: 'String "true" or "false" — overall gate verdict.'
     value: ${{ steps.run-suite.outputs.passed }}
-  score:
-    description: 'Overall pass rate as a float in [0, 1].'
-    value: ${{ steps.run-suite.outputs.score }}
-  report-url:
-    description: 'Relative path to the JSON evidence pack, when written.'
-    value: ${{ steps.run-suite.outputs.report_url }}
 
 runs:
   using: 'composite'
@@ -49,13 +43,20 @@ runs:
     - name: 'Set up Python'
       uses: actions/setup-python@v5
       with:
-        python-version: ${{ inputs.python-version }}
+        python-version: ${{ inputs['python-version'] }}
 
     - name: 'Install sengol'
       shell: bash
+      env:
+        # Inputs are routed through the environment instead of being
+        # interpolated directly into the shell script — direct ${{ … }}
+        # interpolation would be a shell-injection sink, since GitHub
+        # Actions expands templates before bash sees them.
+        SENGOL_VERSION: ${{ inputs['sengol-version'] }}
       run: |
-        if [ -n "${{ inputs.sengol-version }}" ]; then
-          python -m pip install --quiet "sengol==${{ inputs.sengol-version }}"
+        set -euo pipefail
+        if [ -n "$SENGOL_VERSION" ]; then
+          python -m pip install --quiet "sengol==$SENGOL_VERSION"
         else
           python -m pip install --quiet sengol
         fi
@@ -64,29 +65,35 @@ runs:
       id: run-suite
       shell: bash
       env:
-        # SENGOL_AUDIT_URI + SENGOL_SIGNING_KEY must be supplied by the
-        # workflow (typically from organization secrets). The action does
-        # not inject defaults — production audit storage is the caller's
-        # responsibility.
-        SENGOL_TENANT_ID: ${{ env.SENGOL_TENANT_ID }}
+        # Same env-passthrough pattern as install — shell-injection safe.
+        # SENGOL_AUDIT_URI / SENGOL_SIGNING_KEY / SENGOL_TENANT_ID are
+        # NOT injected here: the calling workflow must set them on the
+        # step or job (typically from organization secrets). The action
+        # deliberately refuses to inject defaults — a forgotten secret
+        # should fail loudly, not silently switch to ephemeral storage.
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_FAIL_ON_GATE_FAILURE: ${{ inputs['fail-on-gate-failure'] }}
+        INPUT_OUTPUT_FORMAT: ${{ inputs['output-format'] }}
+        INPUT_JUNIT_OUTPUT_PATH: ${{ inputs['junit-output-path'] }}
       run: |
         set -euo pipefail
+
         FAIL_FLAG=""
-        if [ "${{ inputs.fail-on-gate-failure }}" = "true" ]; then
+        if [ "$INPUT_FAIL_ON_GATE_FAILURE" = "true" ]; then
           FAIL_FLAG="--fail-on-gate-failure"
         fi
 
-        case "${{ inputs.output-format }}" in
+        case "$INPUT_OUTPUT_FORMAT" in
           junit)
-            sengol run-suite --config "${{ inputs.config }}" \
-              --output junit ${FAIL_FLAG} > "${{ inputs.junit-output-path }}"
+            sengol run-suite --config "$INPUT_CONFIG" \
+              --output junit ${FAIL_FLAG} > "$INPUT_JUNIT_OUTPUT_PATH"
             ;;
           github-summary)
-            sengol run-suite --config "${{ inputs.config }}" \
+            sengol run-suite --config "$INPUT_CONFIG" \
               --output github-summary ${FAIL_FLAG}
             ;;
           *)
-            echo "::error::Unknown output-format '${{ inputs.output-format }}' (expected 'github-summary' or 'junit')"
+            echo "::error::Unknown output-format '$INPUT_OUTPUT_FORMAT' (expected 'github-summary' or 'junit')"
             exit 2
             ;;
         esac
