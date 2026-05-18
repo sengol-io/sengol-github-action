@@ -47,11 +47,18 @@ JUnit XML output (for surfacing failures in test-report integrations):
 
 | Output | Description |
 |---|---|
-| `passed` | `"true"` / `"false"` — gate verdict for downstream steps. |
-| `score` | GoldScore (0.0–1.0) for the evaluation period. **Absent** (not empty) when GoldScore is not configured. |
-| `report_url` | Path or URL to the generated PDF evidence pack. **Absent** (not empty) when PDF generation is not enabled. |
+| `passed` | `"true"` / `"false"` — gate verdict for downstream steps. Always set. |
+| `score` | GoldScore (0.0–1.0) for the evaluation period. Empty string (`''`) when GoldScore is not configured. |
+| `report_url` | Path or URL to the generated PDF evidence pack. Empty string (`''`) when PDF generation is not enabled. |
 
-Use `score` and `report_url` in downstream steps via `${{ steps.<id>.outputs.score }}` and `${{ steps.<id>.outputs.report_url }}`. Absent outputs evaluate to an empty string in GitHub Actions expressions — check with `if: steps.<id>.outputs.score != ''`.
+> **GitHub Actions composite action note:** All declared outputs are resolved by the runner even when the underlying step does not emit a value, producing an empty string rather than a truly absent output. Check with `!= ''` rather than testing for absence:
+>
+> ```yaml
+> - if: steps.sengol.outputs.score != ''
+>   run: echo "Score is ${{ steps.sengol.outputs.score }}"
+> ```
+
+The SDK's `write_outputs()` never writes an empty string to `$GITHUB_OUTPUT` — the empty string consumers see is the GitHub Actions runner's own default for unmapped outputs.
 
 ## Required secrets
 
