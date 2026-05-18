@@ -47,9 +47,18 @@ JUnit XML output (for surfacing failures in test-report integrations):
 
 | Output | Description |
 |---|---|
-| `passed` | `"true"` / `"false"` — gate verdict for downstream steps. |
+| `passed` | `"true"` / `"false"` — gate verdict for downstream steps. Always set. |
+| `score` | GoldScore (0.0–1.0) for the evaluation period. Empty string (`''`) when GoldScore is not configured. |
+| `report_url` | Path or URL to the generated PDF evidence pack. Empty string (`''`) when PDF generation is not enabled. |
 
-> The SDK currently only writes the `passed` output. `score` and `report-url` are tracked in the SDK's gap analysis and will be wired in a follow-up release.
+> **GitHub Actions composite action note:** All declared outputs are resolved by the runner even when the underlying step does not emit a value, producing an empty string rather than a truly absent output. Check with `!= ''` rather than testing for absence:
+>
+> ```yaml
+> - if: steps.sengol.outputs.score != ''
+>   run: echo "Score is ${{ steps.sengol.outputs.score }}"
+> ```
+
+The SDK's `write_outputs()` never writes an empty string to `$GITHUB_OUTPUT` — the empty string consumers see is the GitHub Actions runner's own default for unmapped outputs.
 
 ## Required secrets
 
