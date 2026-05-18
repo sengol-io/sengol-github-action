@@ -36,6 +36,12 @@ outputs:
   passed:
     description: 'String "true" or "false" — overall gate verdict.'
     value: ${{ steps.run-suite.outputs.passed }}
+  score:
+    description: 'GoldScore (0.0–1.0) for the evaluation period. Absent when GoldScore is not configured.'
+    value: ${{ steps.run-suite.outputs.score }}
+  report_url:
+    description: 'Path or URL to the generated PDF evidence pack. Absent when PDF generation is not enabled.'
+    value: ${{ steps.run-suite.outputs.report_url }}
 
 runs:
   using: 'composite'

@@ -48,8 +48,10 @@ JUnit XML output (for surfacing failures in test-report integrations):
 | Output | Description |
 |---|---|
 | `passed` | `"true"` / `"false"` — gate verdict for downstream steps. |
+| `score` | GoldScore (0.0–1.0) for the evaluation period. **Absent** (not empty) when GoldScore is not configured. |
+| `report_url` | Path or URL to the generated PDF evidence pack. **Absent** (not empty) when PDF generation is not enabled. |
 
-> The SDK currently only writes the `passed` output. `score` and `report-url` are tracked in the SDK's gap analysis and will be wired in a follow-up release.
+Use `score` and `report_url` in downstream steps via `${{ steps.<id>.outputs.score }}` and `${{ steps.<id>.outputs.report_url }}`. Absent outputs evaluate to an empty string in GitHub Actions expressions — check with `if: steps.<id>.outputs.score != ''`.
 
 ## Required secrets
 
