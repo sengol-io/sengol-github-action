@@ -50,12 +50,16 @@ JUnit XML output (for surfacing failures in test-report integrations):
 | `passed` | `"true"` / `"false"` — gate verdict for downstream steps. Always set. |
 | `score` | GoldScore (0.0–1.0) for the evaluation period. Empty string (`''`) when GoldScore is not configured. |
 | `report_url` | Path or URL to the generated PDF evidence pack. Empty string (`''`) when PDF generation is not enabled. |
+| `no_agent_activity` | `"true"` when at least one obligation found no agent activity in the evaluation period. Empty string (`''`) otherwise. Use to branch on agent-offline vs. evaluation-failure scenarios. |
 
 > **GitHub Actions composite action note:** All declared outputs are resolved by the runner even when the underlying step does not emit a value, producing an empty string rather than a truly absent output. Check with `!= ''` rather than testing for absence:
 >
 > ```yaml
 > - if: steps.sengol.outputs.score != ''
 >   run: echo "Score is ${{ steps.sengol.outputs.score }}"
+>
+> - if: steps.sengol.outputs.no_agent_activity != ''
+>   run: echo "Agent was offline during evaluation period"
 > ```
 
 The SDK's `write_outputs()` never writes an empty string to `$GITHUB_OUTPUT` — the empty string consumers see is the GitHub Actions runner's own default for unmapped outputs.
