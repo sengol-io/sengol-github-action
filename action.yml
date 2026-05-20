@@ -42,6 +42,9 @@ outputs:
   report_url:
     description: 'Path or URL to the generated PDF evidence pack. Absent when PDF generation is not enabled.'
     value: ${{ steps.run-suite.outputs.report_url }}
+  no_agent_activity:
+    description: 'String "true" when at least one obligation found no agent activity in the period. Absent otherwise.'
+    value: ${{ steps.run-suite.outputs.no_agent_activity }}
 
 runs:
   using: 'composite'
