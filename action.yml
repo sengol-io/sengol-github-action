@@ -1,0 +1,235 @@
+name: 'Sengol AI Governance'
+description: 'Run a Sengol evaluation suite and gate CI/CD on compliance obligations'
+author: 'Sengol'
+
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  config:
+    description: 'Path to sengol.yaml (per-org runtime config).'
+    required: false
+    default: 'sengol.yaml'
+  python-version:
+    description: 'Python version to set up before installing sengol.'
+    required: false
+    default: '3.11'
+  sengol-version:
+    description: 'Pin a specific sengol release (e.g. ">=2.0,<3"). Recommended: ">=2.0,<3" for Marketplace listing support and to avoid pre-2.0 releases.'
+    required: false
+    default: '>=2.0,<3'
+  extras:
+    description: >-
+      Comma-separated sengol extras to install (e.g.
+      "anthropic-judge,openai-judge,model"). The default ships both
+      LLM-judge provider SDKs so Faithfulness/Hallucination-style judges
+      wire up out of the box; add "model" for the statistical evaluators
+      (PSI/AUC/Fairness), or set to "" for a bare install with
+      deterministic evaluators only.
+    required: false
+    default: 'anthropic-judge,openai-judge'
+  fail-on-gate-failure:
+    description: 'Exit the action non-zero when the PromotionGate verdict is fail.'
+    required: false
+    default: 'true'
+  output-format:
+    description: 'CI/CD output adapter: "github-summary" (default) or "junit". Workflow-command annotations are emitted alongside both modes.'
+    required: false
+    default: 'github-summary'
+  junit-output-path:
+    description: 'Path to write JUnit XML when output-format=junit. Ignored otherwise.'
+    required: false
+    default: 'eval-results.xml'
+  export:
+    description: 'Comma-separated result-exporter names to push results to (e.g. "mlflow"). Empty disables export. Options come from the sengol.yaml `exporters:` block; exporters are optional sinks and never change the gate verdict.'
+    required: false
+    default: ''
+  pr-comment:
+    description: 'Post or update a sticky PR comment with gate results on pull_request events. Requires GITHUB_TOKEN with pull-requests: write. Degrades gracefully (::notice + step summary) when the token lacks permission — fork PRs never fail the gate over a comment.'
+    required: false
+    default: 'true'
+  repeat:
+    description: 'Run LLM evaluators N times per input for flake tolerance. Deterministic evaluators always run once. Default 1 (no repeat). Pair with min-pass.'
+    required: false
+    default: '1'
+  min-pass:
+    description: 'Require M of N (repeat) LLM-evaluator attempts to pass per score. Default 0 means all attempts must pass (same as repeat value). All attempt records are written to evidence for auditability.'
+    required: false
+    default: '0'
+  dataset-path:
+    description: 'Path to a JSONL trace dataset to evaluate (passed to `sengol gate --dataset-path`). Empty uses the dataset configured in sengol.yaml.'
+    required: false
+    default: ''
+  dataset-id:
+    description: 'Dataset identifier recorded on the evaluation run (passed to `sengol gate --dataset-id`). Empty derives it from config.'
+    required: false
+    default: ''
+
+outputs:
+  passed:
+    description: 'String "true" or "false" — overall gate verdict.'
+    value: ${{ steps.gate.outputs.passed }}
+  score:
+    description: 'GoldScore (0.0–1.0) for the evaluation period. Absent when GoldScore is not configured.'
+    value: ${{ steps.gate.outputs.score }}
+  report_url:
+    description: 'Path or URL to the generated PDF evidence pack. Absent when PDF generation is not enabled.'
+    value: ${{ steps.gate.outputs.report_url }}
+  no_agent_activity:
+    description: 'String "true" when at least one obligation found no agent activity in the period. Absent otherwise.'
+    value: ${{ steps.gate.outputs.no_agent_activity }}
+  regression:
+    description: 'String "true" when current pass-rate regressed vs the configured baseline, "false" when at or above baseline. Empty string when no baseline is configured in sengol.yaml.'
+    value: ${{ steps.gate.outputs.regression }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: 'Set up Python'
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs['python-version'] }}
+
+    - name: 'Install sengol'
+      shell: bash
+      env:
+        # Inputs are routed through the environment instead of being
+        # interpolated directly into the shell script — direct ${{ … }}
+        # interpolation would be a shell-injection sink, since GitHub
+        # Actions expands templates before bash sees them.
+        SENGOL_VERSION: ${{ inputs['sengol-version'] }}
+        SENGOL_EXTRAS: ${{ inputs.extras }}
+      run: |
+        set -euo pipefail
+        # Extras ship optional dependencies (judge provider SDKs, model
+        # evaluators). Without the judge extras, LLM-judge evaluators fail
+        # with "No judge configured" even when ANTHROPIC_API_KEY /
+        # OPENAI_API_KEY are present — the gate needs the SDKs to wire
+        # judges from ControlBook.judge_by_tier.
+        # Extras arrive via env (injection-safe). Whitespace is normalized
+        # away ("a, b" → "a,b" — the common hand-written form), then the
+        # value is validated to extras-name characters so it can't smuggle
+        # pip arguments.
+        SENGOL_EXTRAS="$(printf '%s' "$SENGOL_EXTRAS" | tr -d '[:space:]')"
+        if ! printf '%s' "$SENGOL_EXTRAS" | grep -Eq '^([A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*)?$'; then
+          echo "::error::Invalid extras input: '$SENGOL_EXTRAS' — comma-separated extras names (letters, digits, hyphens, underscores); no empty segments"
+          exit 1
+        fi
+        if [ -n "$SENGOL_EXTRAS" ]; then
+          SPEC="sengol[$SENGOL_EXTRAS]"
+        else
+          SPEC="sengol"
+        fi
+        # SENGOL_VERSION may be a bare version ("2.0.0", needing a pip "=="
+        # operator) or already a full specifier (">=2.0,<3", "<3", "~=2.0" —
+        # used as-is). Detect by leading character rather than always
+        # prepending "==", which produced the invalid "sengol==>=2.0,<3".
+        if [ -n "$SENGOL_VERSION" ]; then
+          case "$SENGOL_VERSION" in
+            [\<\>=\!~]*) SPEC="${SPEC}${SENGOL_VERSION}" ;;
+            *) SPEC="${SPEC}==${SENGOL_VERSION}" ;;
+          esac
+        fi
+        python -m pip install --quiet "$SPEC"
+
+    - name: 'Run evaluation suite'
+      id: gate
+      shell: bash
+      env:
+        # Same env-passthrough pattern as install — shell-injection safe.
+        # SENGOL_AUDIT_URI / SENGOL_SIGNING_KEY / SENGOL_TENANT_ID are
+        # NOT injected here: the calling workflow must set them on the
+        # step or job (typically from organization secrets). The action
+        # deliberately refuses to inject defaults — a forgotten secret
+        # should fail loudly, not silently switch to ephemeral storage.
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_FAIL_ON_GATE_FAILURE: ${{ inputs['fail-on-gate-failure'] }}
+        INPUT_OUTPUT_FORMAT: ${{ inputs['output-format'] }}
+        INPUT_JUNIT_OUTPUT_PATH: ${{ inputs['junit-output-path'] }}
+        INPUT_EXPORT: ${{ inputs.export }}
+        INPUT_PR_COMMENT: ${{ inputs['pr-comment'] }}
+        INPUT_REPEAT: ${{ inputs.repeat }}
+        INPUT_MIN_PASS: ${{ inputs['min-pass'] }}
+        INPUT_DATASET_PATH: ${{ inputs['dataset-path'] }}
+        INPUT_DATASET_ID: ${{ inputs['dataset-id'] }}
+        GITHUB_TOKEN: ${{ inputs['pr-comment'] != 'false' && github.token || '' }}
+      run: |
+        set -euo pipefail
+
+        FAIL_FLAG=()
+        if [ "$INPUT_FAIL_ON_GATE_FAILURE" = "true" ]; then
+          FAIL_FLAG=(--fail-on-gate-failure)
+        fi
+
+        # Cache --help once; all feature-detection greps reuse it.
+        SENGOL_HELP=$(sengol gate --help 2>/dev/null || true)
+
+        # PR comment flag — default on for pull_request events; can be disabled.
+        # GITHUB_TOKEN is already empty when pr-comment=false (see env block above),
+        # so older CLIs that lack --no-pr-comment will also stay quiet.
+        PR_COMMENT_FLAG=()
+        if [ "$INPUT_PR_COMMENT" = "false" ]; then
+          if echo "$SENGOL_HELP" | grep -q -- '--no-pr-comment'; then
+            PR_COMMENT_FLAG=(--no-pr-comment)
+          fi
+        fi
+
+        # Optional downstream exporters. Passed as a single --export flag; the CLI
+        # treats exporters as best-effort sinks (a failure never fails the gate).
+        # Honor that contract across versions: if a pinned sengol-version predates
+        # --export, warn and skip rather than failing the step (set -e) on an
+        # unknown flag.
+        EXPORT_FLAG=()
+        if [ -n "$INPUT_EXPORT" ]; then
+          if echo "$SENGOL_HELP" | grep -q -- '--export'; then
+            EXPORT_FLAG=(--export "$INPUT_EXPORT")
+          else
+            echo "::warning::Installed sengol does not support '--export' (pin a newer sengol-version); skipping result export."
+          fi
+        fi
+
+        # Dataset selection. --dataset-path has shipped since sengol 0.5.0, so
+        # pass it unconditionally when set — do NOT gate on grepping the
+        # rich-formatted `--help`, which wraps/styles option names and silently
+        # dropped the flag in CI, making gate fall back to an empty
+        # single-sample and fail every obligation.
+        DATASET_FLAG=()
+        if [ -n "${INPUT_DATASET_PATH:-}" ]; then
+          DATASET_FLAG=(--dataset-path "$INPUT_DATASET_PATH")
+          if [ -n "${INPUT_DATASET_ID:-}" ]; then
+            DATASET_FLAG+=(--dataset-id "$INPUT_DATASET_ID")
+          fi
+        fi
+
+        # Flake tolerance — repeat / min-pass (opt-in, default 1/0 = disabled).
+        REPEAT_FLAG=()
+        if [ "${INPUT_REPEAT:-1}" != "1" ]; then
+          if echo "$SENGOL_HELP" | grep -q -- '--repeat'; then
+            REPEAT_FLAG=(--repeat "$INPUT_REPEAT")
+            if [ -n "${INPUT_MIN_PASS:-}" ] && [ "$INPUT_MIN_PASS" != "0" ]; then
+              REPEAT_FLAG+=(--min-pass "$INPUT_MIN_PASS")
+            fi
+          else
+            echo "::warning::Installed sengol does not support '--repeat' (pin a newer sengol-version); flake tolerance disabled."
+          fi
+        elif [ -n "${INPUT_MIN_PASS:-}" ] && [ "$INPUT_MIN_PASS" != "0" ]; then
+          echo "::warning::sengol: 'min-pass=${INPUT_MIN_PASS}' is set but 'repeat=1' — min-pass is ignored."
+        fi
+
+        case "$INPUT_OUTPUT_FORMAT" in
+          junit)
+            sengol gate --config "$INPUT_CONFIG" \
+              --output junit "${DATASET_FLAG[@]}" "${EXPORT_FLAG[@]}" "${REPEAT_FLAG[@]}" "${FAIL_FLAG[@]}" \
+              "${PR_COMMENT_FLAG[@]}" > "$INPUT_JUNIT_OUTPUT_PATH"
+            ;;
+          github-summary)
+            sengol gate --config "$INPUT_CONFIG" \
+              --output github-summary "${DATASET_FLAG[@]}" "${EXPORT_FLAG[@]}" "${REPEAT_FLAG[@]}" \
+              "${FAIL_FLAG[@]}" "${PR_COMMENT_FLAG[@]}"
+            ;;
+          *)
+            echo "::error::Unknown output-format '$INPUT_OUTPUT_FORMAT' (expected 'github-summary' or 'junit')"
+            exit 2
+            ;;
+        esac

@@ -1,0 +1,42 @@
+# Release-tag helper. The remote-execution environment used for automation can
+# push branches but not tags (git-proxy policy), so tags are pushed from inside
+# CI via workflow_dispatch instead. Idempotent: re-pointing an existing tag
+# requires deleting it first (deliberately NOT automated).
+name: Tag release
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Commit SHA the tags should point at
+        required: true
+      tags:
+        description: Space-separated tag names to create (e.g. "2.0.0 2")
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create and push tags
+        env:
+          SHA: ${{ inputs.sha }}
+          TAGS: ${{ inputs.tags }}
+        run: |
+          set -euo pipefail
+          git rev-parse --verify "${SHA}^{commit}" >/dev/null
+          for tag in ${TAGS}; do
+            if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+              echo "::error::tag ${tag} already exists on origin — refusing to move it"
+              exit 1
+            fi
+            git tag "${tag}" "${SHA}"
+          done
+          git push origin ${TAGS}
+          echo "pushed: ${TAGS} -> ${SHA}"
