@@ -65,6 +65,14 @@ inputs:
     description: 'Dataset identifier recorded on the evaluation run (passed to `sengol gate --dataset-id`). Empty derives it from config.'
     required: false
     default: ''
+  regression-runner:
+    description: 'module:function to run the regression suite against (e.g. "agent.main:handle"), passed to `sengol regression run --runner`. Empty (default) skips the regression step. Requires a sengol version with `sengol regression run`.'
+    required: false
+    default: ''
+  regression-agent:
+    description: 'Agent id passed to `sengol regression run --agent`. Required when `regression-runner` is set.'
+    required: false
+    default: ''
 
 outputs:
   passed:
@@ -233,3 +241,36 @@ runs:
             exit 2
             ;;
         esac
+
+    - name: 'Run regression suite'
+      if: ${{ inputs['regression-runner'] != '' }}
+      shell: bash
+      env:
+        # Same env-passthrough pattern as the other steps — shell-injection safe.
+        # A custom `if:` expression still implicitly ANDs with success(), so this
+        # step is skipped whenever the evaluation-suite step above failed.
+        INPUT_REGRESSION_RUNNER: ${{ inputs['regression-runner'] }}
+        INPUT_REGRESSION_AGENT: ${{ inputs['regression-agent'] }}
+        GITHUB_TOKEN: ${{ inputs['pr-comment'] != 'false' && github.token || '' }}
+      run: |
+        set -euo pipefail
+
+        if [ -z "${INPUT_REGRESSION_AGENT:-}" ]; then
+          echo "::error::regression-agent is required when regression-runner is set"
+          exit 2
+        fi
+
+        # Feature-detect: older sengol pins may lack `sengol regression run` entirely.
+        REGRESSION_HELP=$(sengol regression run --help 2>/dev/null || true)
+        if ! echo "$REGRESSION_HELP" | grep -q -- '--runner'; then
+          echo "::warning::Installed sengol does not support 'sengol regression run' (pin a newer sengol-version); skipping regression suite."
+          exit 0
+        fi
+
+        OUTPUT_FLAG=()
+        if echo "$REGRESSION_HELP" | grep -q -- '--output'; then
+          OUTPUT_FLAG=(--output github-summary)
+        fi
+
+        sengol regression run --agent "$INPUT_REGRESSION_AGENT" --runner "$INPUT_REGRESSION_RUNNER" \
+          ${OUTPUT_FLAG[@]+"${OUTPUT_FLAG[@]}"}
