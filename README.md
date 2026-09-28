@@ -70,6 +70,20 @@ Push results to a downstream exporter (e.g. MLflow):
     MLFLOW_TRACKING_TOKEN: ${{ secrets.MLFLOW_TRACKING_TOKEN }}
 ```
 
+Run a regression suite against a target agent after the gate passes:
+
+```yaml
+- uses: sengol-io/sengol-github-action@2.0.0
+  with:
+    regression-runner: agent.main:handle
+    regression-agent: acme-support-agent
+  env:
+    SENGOL_AUDIT_URI: ${{ secrets.SENGOL_AUDIT_URI }}
+    SENGOL_SIGNING_KEY: ${{ secrets.SENGOL_SIGNING_KEY }}
+    SENGOL_TENANT_ID: ${{ secrets.SENGOL_TENANT_ID }}
+    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
 ### Python caching
 
 Pin `sengol-version` and enable pip caching via `actions/setup-python` to avoid re-downloading on every run:
@@ -105,6 +119,8 @@ Pin `sengol-version` and enable pip caching via `actions/setup-python` to avoid 
 | `min-pass` | no | `0` | Require M of N (`repeat`) LLM-evaluator attempts to pass. `0` means all must pass (equivalent to `repeat` value). |
 | `dataset-path` | no | `''` | Path to a JSONL trace dataset (`sengol gate --dataset-path`). Empty uses the dataset from `sengol.yaml`. |
 | `dataset-id` | no | `''` | Dataset identifier recorded on the evaluation run. Empty derives it from config. |
+| `regression-runner` | no | `''` | `module:function` passed to `sengol regression run --runner` (e.g. `agent.main:handle`). Empty skips the regression step. Requires a sengol version with `sengol regression run`. |
+| `regression-agent` | no | `''` | Agent id passed to `sengol regression run --agent`. Required when `regression-runner` is set. |
 
 ## Outputs
 
