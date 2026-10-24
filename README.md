@@ -2,9 +2,24 @@
 
 GitHub Action that runs a [Sengol](https://github.com/sengol-io/sengol) evaluation suite and gates CI/CD on compliance obligations.
 
-The action installs `sengol`, runs `sengol gate` against your `sengol.yaml`, and writes the results to the GitHub Actions step summary, a sticky PR comment, or a JUnit XML file. Workflow-command annotations are emitted alongside all modes so failed obligations surface inline on the PR diff. Your pipeline fails when an obligation pass rate falls below its declared threshold.
+The action installs `sengol`, runs `sengol gate` against your server, and writes the results to the GitHub Actions step summary, a sticky PR comment, or a JUnit XML file. Workflow-command annotations are emitted alongside all modes so failed obligations surface inline on the PR diff. Your pipeline fails when an obligation pass rate falls below its declared threshold.
 
 The gate verdict and the signed audit record are the same object — the PR comment is the developer view of evidence that already exists, never a second source of truth.
+
+## What you configure, and what the server does
+
+Your `sengol.yaml` does not carry a ControlBook, regulations, control evaluators, judges or pass
+thresholds. The Sengol server owns them for each agent. On every run the gate reads the agent's
+risk tier and labels from the server, resolves which controls apply, and runs the evaluators
+those controls name with the settings the ControlBook gives them. Your `sengol.yaml` may list
+extra quality evaluators; a `suite.controlbook` key makes the gate exit 2.
+
+If the server cannot be reached, the step fails. Nothing is cached and there is no fallback, so
+a build never passes against a ControlBook it did not read. The server is expected to be highly
+available.
+
+You do not copy or paste a ControlBook signing key. The gate verifies the ControlBook against
+the install's public keys, fetched over verified TLS from your server on every run.
 
 ## Usage
 
@@ -13,11 +28,9 @@ Minimal — runs the suite, fails the workflow when the gate fails, writes a mar
 ```yaml
 - uses: sengol-io/sengol-github-action@2.0.0
   with:
+    api-url: ${{ vars.SENGOL_API_URL }}
     config: sengol.yaml
   env:
-    SENGOL_AUDIT_URI: ${{ secrets.SENGOL_AUDIT_URI }}
-    SENGOL_SIGNING_KEY: ${{ secrets.SENGOL_SIGNING_KEY }}
-    SENGOL_TENANT_ID: ${{ secrets.SENGOL_TENANT_ID }}
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
@@ -34,12 +47,10 @@ JUnit XML output (for surfacing failures in test-report integrations):
 ```yaml
 - uses: sengol-io/sengol-github-action@2.0.0
   with:
+    api-url: ${{ vars.SENGOL_API_URL }}
     output-format: junit
     junit-output-path: eval-results.xml
   env:
-    SENGOL_AUDIT_URI: ${{ secrets.SENGOL_AUDIT_URI }}
-    SENGOL_SIGNING_KEY: ${{ secrets.SENGOL_SIGNING_KEY }}
-    SENGOL_TENANT_ID: ${{ secrets.SENGOL_TENANT_ID }}
 ```
 
 Flake tolerance — retry LLM evaluators 3 times, require 2/3 to pass:
@@ -47,12 +58,10 @@ Flake tolerance — retry LLM evaluators 3 times, require 2/3 to pass:
 ```yaml
 - uses: sengol-io/sengol-github-action@2.0.0
   with:
+    api-url: ${{ vars.SENGOL_API_URL }}
     repeat: '3'
     min-pass: '2'
   env:
-    SENGOL_AUDIT_URI: ${{ secrets.SENGOL_AUDIT_URI }}
-    SENGOL_SIGNING_KEY: ${{ secrets.SENGOL_SIGNING_KEY }}
-    SENGOL_TENANT_ID: ${{ secrets.SENGOL_TENANT_ID }}
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
@@ -61,11 +70,9 @@ Push results to a downstream exporter (e.g. MLflow):
 ```yaml
 - uses: sengol-io/sengol-github-action@2.0.0
   with:
+    api-url: ${{ vars.SENGOL_API_URL }}
     export: mlflow
   env:
-    SENGOL_AUDIT_URI: ${{ secrets.SENGOL_AUDIT_URI }}
-    SENGOL_SIGNING_KEY: ${{ secrets.SENGOL_SIGNING_KEY }}
-    SENGOL_TENANT_ID: ${{ secrets.SENGOL_TENANT_ID }}
     MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
     MLFLOW_TRACKING_TOKEN: ${{ secrets.MLFLOW_TRACKING_TOKEN }}
 ```
@@ -75,12 +82,10 @@ Run a regression suite against a target agent after the gate passes:
 ```yaml
 - uses: sengol-io/sengol-github-action@2.0.0
   with:
+    api-url: ${{ vars.SENGOL_API_URL }}
     regression-runner: agent.main:handle
     regression-agent: acme-support-agent
   env:
-    SENGOL_AUDIT_URI: ${{ secrets.SENGOL_AUDIT_URI }}
-    SENGOL_SIGNING_KEY: ${{ secrets.SENGOL_SIGNING_KEY }}
-    SENGOL_TENANT_ID: ${{ secrets.SENGOL_TENANT_ID }}
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
@@ -96,6 +101,7 @@ Pin `sengol-version` and enable pip caching via `actions/setup-python` to avoid 
 
 - uses: sengol-io/sengol-github-action@2.0.0
   with:
+    api-url: ${{ vars.SENGOL_API_URL }}
     sengol-version: '2.0.0'   # pin to a specific release
     config: sengol.yaml
 ```
@@ -106,6 +112,7 @@ Pin `sengol-version` and enable pip caching via `actions/setup-python` to avoid 
 
 | Input | Required | Default | Description |
 |---|---|---|---|
+| `api-url` | yes (or `SENGOL_API_URL`) | *(none)* | Base URL of your Sengol server. The server owns the ControlBook and control evaluators for the agent; the step fails if it cannot be reached. |
 | `config` | no | `sengol.yaml` | Path to your `sengol.yaml`. |
 | `python-version` | no | `3.11` | Python version installed before `pip install sengol`. |
 | `sengol-version` | no | `>=2.0,<3` | Pin a specific release or range (e.g. `2.0.0`, `>=2.0,<3`). |
@@ -158,20 +165,20 @@ suite:
 
 The `regression` output is then `"true"` / `"false"` on every run, and the pass-rate delta appears in the step summary and PR comment.
 
-## Required secrets
+## Required settings
 
-The action does not inject defaults for audit-store credentials — your workflow must supply:
+- `api-url` input (or `SENGOL_API_URL`) — your Sengol server. The action fails first, before
+  installing anything, when neither is set. A repository or organization variable works well.
+- Authentication — GitHub OIDC (below). `SENGOL_API_TOKEN` remains the fallback.
+- `ANTHROPIC_API_KEY` — only when your suite includes LLM-judge evaluators.
 
-- `SENGOL_AUDIT_URI` — Postgres URI (or `memory://` for ephemeral local runs)
-- `SENGOL_SIGNING_KEY` — 32-byte HMAC key for signing audit records
-- `SENGOL_TENANT_ID` — tenant identifier
-- `ANTHROPIC_API_KEY` — only when your suite includes LLM-judge evaluators
+The server signs and stores the evidence, so the action needs no signing key, audit store URI or
+tenant id.
 
 ## Authentication: GitHub OIDC federation (no long-lived authentication token)
 
-This removes the long-lived **`SENGOL_API_TOKEN`** from CI. It does not make the workflow
-"secret-free" — `SENGOL_AUDIT_URI`, `SENGOL_SIGNING_KEY`, `SENGOL_TENANT_ID`, and (for
-LLM-judge suites) `ANTHROPIC_API_KEY` are still required secrets.
+This removes the long-lived **`SENGOL_API_TOKEN`** from CI. LLM-judge suites still need
+`ANTHROPIC_API_KEY`.
 
 **Before (every workflow):** a long-lived `SENGOL_API_TOKEN` stored as a repo/org secret,
 shared across every run, with no per-run identity.
@@ -179,6 +186,7 @@ shared across every run, with no per-run identity.
 ```yaml
 - uses: sengol-io/sengol-github-action@2.0.0
   with:
+    api-url: ${{ vars.SENGOL_API_URL }}
     config: sengol.yaml
   env:
     SENGOL_API_TOKEN: ${{ secrets.SENGOL_API_TOKEN }}   # stored secret, never rotates itself
@@ -202,11 +210,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: sengol-io/sengol-github-action@2.0.0
         with:
+          api-url: ${{ vars.SENGOL_API_URL }}
           config: sengol.yaml
         env:
-          SENGOL_AUDIT_URI: ${{ secrets.SENGOL_AUDIT_URI }}
-          SENGOL_SIGNING_KEY: ${{ secrets.SENGOL_SIGNING_KEY }}
-          SENGOL_TENANT_ID: ${{ secrets.SENGOL_TENANT_ID }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 

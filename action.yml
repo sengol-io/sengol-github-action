@@ -7,6 +7,15 @@ branding:
   color: 'blue'
 
 inputs:
+  api-url:
+    description: >-
+      Base URL of your Sengol server (for example "https://sengol.example.com").
+      Sets SENGOL_API_URL. The server owns the ControlBook, the control
+      evaluators and their settings for the agent, and the gate reads them from
+      it on every run. If the server cannot be reached the step fails; nothing
+      is cached. Falls back to a SENGOL_API_URL set in the step or job env.
+    required: false
+    default: ''
   config:
     description: 'Path to sengol.yaml (per-org runtime config).'
     required: false
@@ -94,6 +103,17 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    - name: 'Check the Sengol server address'
+      shell: bash
+      env:
+        INPUT_API_URL: ${{ inputs['api-url'] }}
+      run: |
+        set -euo pipefail
+        if [ -z "${INPUT_API_URL:-}" ] && [ -z "${SENGOL_API_URL:-}" ]; then
+          echo "::error::No Sengol server address. Set the 'api-url' input (or SENGOL_API_URL): the gate reads the ControlBook and the control evaluators from your server and cannot run without it."
+          exit 2
+        fi
+
     - name: 'Set up Python'
       uses: actions/setup-python@v5
       with:
@@ -146,11 +166,10 @@ runs:
       shell: bash
       env:
         # Same env-passthrough pattern as install — shell-injection safe.
-        # SENGOL_AUDIT_URI / SENGOL_SIGNING_KEY / SENGOL_TENANT_ID are
-        # NOT injected here: the calling workflow must set them on the
-        # step or job (typically from organization secrets). The action
-        # deliberately refuses to inject defaults — a forgotten secret
-        # should fail loudly, not silently switch to ephemeral storage.
+        # The server signs and stores the evidence, so no signing key or
+        # audit store is passed. Authentication is the GitHub OIDC exchange
+        # (needs `id-token: write`), with SENGOL_API_TOKEN as the fallback.
+        INPUT_API_URL: ${{ inputs['api-url'] }}
         INPUT_CONFIG: ${{ inputs.config }}
         INPUT_FAIL_ON_GATE_FAILURE: ${{ inputs['fail-on-gate-failure'] }}
         INPUT_OUTPUT_FORMAT: ${{ inputs['output-format'] }}
@@ -164,6 +183,10 @@ runs:
         GITHUB_TOKEN: ${{ inputs['pr-comment'] != 'false' && github.token || '' }}
       run: |
         set -euo pipefail
+
+        if [ -n "${INPUT_API_URL:-}" ]; then
+          export SENGOL_API_URL="$INPUT_API_URL"
+        fi
 
         FAIL_FLAG=()
         if [ "$INPUT_FAIL_ON_GATE_FAILURE" = "true" ]; then
@@ -249,11 +272,16 @@ runs:
         # Same env-passthrough pattern as the other steps — shell-injection safe.
         # A custom `if:` expression still implicitly ANDs with success(), so this
         # step is skipped whenever the evaluation-suite step above failed.
+        INPUT_API_URL: ${{ inputs['api-url'] }}
         INPUT_REGRESSION_RUNNER: ${{ inputs['regression-runner'] }}
         INPUT_REGRESSION_AGENT: ${{ inputs['regression-agent'] }}
         GITHUB_TOKEN: ${{ inputs['pr-comment'] != 'false' && github.token || '' }}
       run: |
         set -euo pipefail
+
+        if [ -n "${INPUT_API_URL:-}" ]; then
+          export SENGOL_API_URL="$INPUT_API_URL"
+        fi
 
         if [ -z "${INPUT_REGRESSION_AGENT:-}" ]; then
           echo "::error::regression-agent is required when regression-runner is set"
