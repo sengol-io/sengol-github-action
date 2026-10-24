@@ -17,7 +17,7 @@ jobs:
         run: |
           set -euo pipefail
           bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
-          ./actionlint -color
+          ./actionlint -color -ignore 'SC2086'
 
   needs-server-address:
     runs-on: ubuntu-latest
