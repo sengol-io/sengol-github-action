@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint workflows
+        run: |
+          set -euo pipefail
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color -ignore 'SC2086'
+
+  needs-server-address:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the action with no server address
+        id: gate
+        uses: ./
+        continue-on-error: true
+      - name: The step must have failed before installing anything
+        env:
+          OUTCOME: ${{ steps.gate.outcome }}
+        run: |
+          test "$OUTCOME" = "failure"
